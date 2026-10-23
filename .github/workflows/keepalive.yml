@@ -38,3 +38,45 @@ jobs:
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
           KEEPALIVE_RPC: keepalive_ping
         run: python3 scripts/keepalive.py
+
+  alert:
+    name: Report keepalive failures and recovery
+    if: ${{ always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    needs: [tests, ping]
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TESTS_RESULT: ${{ needs.tests.result }}
+      PING_RESULT: ${{ needs.ping.result }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Create or resolve GitHub issue
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="Supabase keep-alive failure"
+          number="$(gh issue list --repo "$GH_REPO" --state open --limit 500 --json number,title --jq '.[] | select(.title == "Supabase keep-alive failure") | .number' | sed -n '1p')"
+
+          if [[ "$PING_RESULT" == "success" && "$TESTS_RESULT" == "success" ]]; then
+            if [[ -n "$number" ]]; then
+              gh issue comment "$number" --repo "$GH_REPO" --body "✅ Keepalive recovered. Successful run: $RUN_URL"
+              gh issue close "$number" --repo "$GH_REPO" --reason completed
+              echo "Resolved keepalive failure issue #$number"
+            else
+              echo "Keepalive healthy; no failure issue to resolve."
+            fi
+          else
+            body="$(printf '⚠️ Supabase keep-alive did not complete successfully.\n\n- Tests: %s\n- Database ping: %s\n- Workflow run: %s\n\nInspect the run logs and Supabase project status. No keys or response bodies are included in this alert.\n' "$TESTS_RESULT" "$PING_RESULT" "$RUN_URL")"
+            if [[ -n "$number" ]]; then
+              gh issue comment "$number" --repo "$GH_REPO" --body "$body"
+              echo "Updated existing keepalive failure issue #$number"
+            else
+              gh issue create --repo "$GH_REPO" --title "$title" --body "$body"
+              echo "Created keepalive failure issue."
+            fi
+          fi
