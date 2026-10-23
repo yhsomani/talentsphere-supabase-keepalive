@@ -1,34 +1,48 @@
 #!/usr/bin/env python3
-"""Check GitHub Actions history for a recent successful *real* keepalive ping."""
+"""Check for a recent successful database ping, not merely successful CI tests."""
 import datetime as dt
 import json
 import os
+import re
 import sys
 import urllib.error
-import urllib.parse
 import urllib.request
 
 UTC = dt.timezone.utc
 
 
 def recent_success(runs, now, max_age_hours):
+    """Candidate completed runs; only scheduled/manual events on main qualify."""
     threshold = now - dt.timedelta(hours=max_age_hours)
     for run in runs:
-        # 'push' runs succeed on unit tests alone; only these events execute ping.
         if run.get("event") not in ("schedule", "workflow_dispatch"):
             continue
-        if run.get("conclusion") != "success":
+        if run.get("head_branch") != "main" or run.get("conclusion") != "success":
             continue
         timestamp = run.get("updated_at")
         if not timestamp:
             continue
         try:
             finished = dt.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        except ValueError:
+        except (ValueError, TypeError, AttributeError):
             continue
         if threshold <= finished <= now:
-            return True
-    return False
+            yield run
+
+
+def fetch_json(url, token, opener):
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "talentsphere-keepalive-watchdog/2.0",
+        },
+    )
+    with opener(request, timeout=20) as response:
+        if response.status != 200:
+            raise ValueError("unexpected GitHub API status")
+        return json.load(response)
 
 
 def main(environ=None, opener=urllib.request.urlopen, now=None):
@@ -40,35 +54,30 @@ def main(environ=None, opener=urllib.request.urlopen, now=None):
     except ValueError:
         print("[watchdog] Invalid maximum age.")
         return 2
-    if not token or not repo or not all(part and part.replace("-", "").replace("_", "").isalnum() for part in repo.split("/")) or len(repo.split("/")) != 2 or not 6 <= hours <= 168:
+    if not token or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or not 6 <= hours <= 168:
         print("[watchdog] Invalid GitHub token/repository or age threshold.")
         return 2
-    url = f"https://api.github.com/repos/{repo}/actions/workflows/keepalive.yml/runs?per_page=100"
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "talentsphere-keepalive-watchdog/1.0",
-        },
-    )
+    base = f"https://api.github.com/repos/{repo}"
     try:
-        with opener(request, timeout=20) as response:
-            if response.status != 200:
-                raise ValueError("unexpected status")
-            data = json.load(response)
+        data = fetch_json(f"{base}/actions/workflows/keepalive.yml/runs?branch=main&per_page=100", token, opener)
         runs = data.get("workflow_runs")
         if not isinstance(runs, list):
             raise ValueError("missing run history")
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError) as error:
-        print(f"[watchdog] Failed to retrieve workflow history ({type(error).__name__}).")
+        current = now or dt.datetime.now(UTC)
+        for run in recent_success(runs, current, hours):
+            run_id = run.get("id")
+            if not isinstance(run_id, int) or run_id <= 0:
+                continue
+            # A successful workflow is not enough: verify the actual database ping job.
+            jobs = fetch_json(f"{base}/actions/runs/{run_id}/jobs?per_page=100", token, opener)
+            if any(job.get("name") == "ping" and job.get("conclusion") == "success"
+                   for job in jobs.get("jobs", [])):
+                print(f"[watchdog] OK: verified successful database ping within {hours} hours.")
+                return 0
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, TypeError, KeyError) as error:
+        print(f"[watchdog] Unable to verify ping history ({type(error).__name__}).")
         return 1
-    current = now or dt.datetime.now(UTC)
-    if recent_success(runs, current, hours):
-        print(f"[watchdog] OK: a successful database ping completed within {hours} hours.")
-        return 0
-    print(f"[watchdog] ALERT: no successful database ping in the last {hours} hours.")
-    print("[watchdog] Investigate keepalive workflow runs, secrets, and Supabase project status.")
+    print(f"[watchdog] ALERT: no verified successful database ping in the last {hours} hours.")
     return 1
 
 
