@@ -69,8 +69,9 @@ def main() -> int:
         return 2
 
     headers = {
+        # Publishable keys (sb_publishable_...) are not JWTs, so they go only in
+        # the apikey header. Sending them as a Bearer token causes 401 responses.
         "apikey": key,
-        "Authorization": f"Bearer {key}",
         "Accept": "application/json",
         "User-Agent": "talentsphere-keepalive/1.0",
     }
