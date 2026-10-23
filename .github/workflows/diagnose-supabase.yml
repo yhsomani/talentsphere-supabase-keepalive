@@ -29,5 +29,7 @@ jobs:
             code=$(curl -sS -m 20 -o /tmp/body.txt -w "%{http_code}" "${H[@]}" "$URL/rest/v1/" 2>&1)
             say "$variant: HTTP $code. body: $(head -c 300 /tmp/body.txt)"
           done
+          code=$(curl -sS -m 20 -o /tmp/body.txt -w "%{http_code}" -H "apikey: $KEY" "$URL/rest/v1/keepalive_probe_missing?select=*&limit=1")
+          say "rest table probe (publishable key): HTTP $code. body: $(head -c 300 /tmp/body.txt)"
           say "auth/v1/health without key: HTTP $(curl -sS -m 20 -o /dev/null -w '%{http_code}' "$URL/auth/v1/health")"
           say "auth/v1/health with key: HTTP $(curl -sS -m 20 -o /dev/null -w '%{http_code}' -H "apikey: $KEY" "$URL/auth/v1/health")"
