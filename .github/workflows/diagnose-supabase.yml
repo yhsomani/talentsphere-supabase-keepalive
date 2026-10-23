@@ -1,0 +1,31 @@
+name: Diagnose Supabase auth (temporary)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Try request variants
+        env:
+          URL: ${{ secrets.SUPABASE_URL }}
+          KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          echo "URL length: ${#URL}  KEY length: ${#KEY}  KEY prefix: ${KEY:0:15}"
+          echo "URL has trailing space/newline? $(printf '%s' "$URL" | grep -c '[[:space:]]')"
+          echo "KEY has whitespace? $(printf '%s' "$KEY" | grep -c '[[:space:]]')"
+          for variant in apikey-only bearer-only both; do
+            case $variant in
+              apikey-only) H=(-H "apikey: $KEY");;
+              bearer-only) H=(-H "Authorization: Bearer $KEY");;
+              both) H=(-H "apikey: $KEY" -H "Authorization: Bearer $KEY");;
+            esac
+            out=$(curl -sS -m 20 -o /tmp/body.txt -w "%{http_code}" "${H[@]}" "$URL/rest/v1/")
+            echo "== $variant: HTTP $out"; head -c 300 /tmp/body.txt; echo
+          done
+          echo "== auth health (no key): HTTP $(curl -sS -m 20 -o /dev/null -w '%{http_code}' "$URL/auth/v1/health")"
+          echo "== auth health (with key): HTTP $(curl -sS -m 20 -o /dev/null -w '%{http_code}' -H "apikey: $KEY" "$URL/auth/v1/health")"
