@@ -1,94 +1,87 @@
 #!/usr/bin/env python3
+"""Read-only, database-backed Supabase activity check.
+
+Requires a dedicated public.keepalive_ping() STABLE SQL function returning 1.
+No data, schema or user records are changed by this script.
 """
-Keep-alive ping for a Supabase project.
-
-READ-ONLY by design: this script only issues HTTP GET requests.
-It never inserts, updates, or deletes data, and never creates or alters schema.
-
-Environment variables:
-  SUPABASE_URL             Required. e.g. https://qidckctwrkxyiwworchd.supabase.co
-  SUPABASE_PUBLISHABLE_KEY Required. Publishable/anon key (sent as the apikey header).
-                           Read-only access to public data is all this needs.
-  KEEPALIVE_TABLE          Optional. Name of an existing table to run a
-                           `select=<col>&limit=1` read against. Leave unset while the
-                           project has no public tables; the REST root ping is used instead.
-  KEEPALIVE_SELECT_COLUMN  Optional, default "*". Column list for the read.
-"""
-
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
-MAX_ATTEMPTS = 3
-RETRY_DELAY_SECONDS = 10
-TIMEOUT_SECONDS = 20
+ATTEMPTS = 3
+TIMEOUT = 15
+RETRY_SECONDS = 5
 
 
-def log(message: str) -> None:
+def log(message):
     print(f"[keepalive] {message}", flush=True)
 
 
-def get(url: str, headers: dict) -> tuple[int, str]:
-    request = urllib.request.Request(url, headers=headers, method="GET")
-    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-        body = response.read().decode("utf-8", errors="replace")
-        return response.status, body
+def configuration(environ):
+    url = environ.get("SUPABASE_URL", "").strip().rstrip("/")
+    key = environ.get("SUPABASE_PUBLISHABLE_KEY", "").strip()
+    function = environ.get("KEEPALIVE_RPC", "keepalive_ping").strip()
+    parts = urllib.parse.urlsplit(url)
+    if (
+        parts.scheme != "https" or not parts.hostname or parts.username
+        or parts.password or parts.path or parts.query or parts.fragment
+        or not parts.netloc or any(ch.isspace() for ch in url)
+    ):
+        raise ValueError("SUPABASE_URL must be an HTTPS project origin with no path or credentials")
+    if not key or key.startswith(("sb_secret_", "sb_service_role_")):
+        raise ValueError("Configure SUPABASE_PUBLISHABLE_KEY with a publishable/anon key, never a secret key")
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", function):
+        raise ValueError("KEEPALIVE_RPC must be a PostgreSQL function identifier")
+    return url, key, function
 
 
-def request_with_retries(label: str, url: str, headers: dict) -> bool:
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        try:
-            status, body = get(url, headers)
-            if 200 <= status < 300:
-                log(f"{label}: OK (HTTP {status}, {len(body)} bytes)")
-                return True
-            log(f"{label}: unexpected HTTP {status} on attempt {attempt}")
-        except urllib.error.HTTPError as error:
-            # 4xx means misconfiguration (bad key, wrong URL); retrying will not help.
-            log(f"{label}: HTTP {error.code} on attempt {attempt}: {error.reason}")
-            if 400 <= error.code < 500:
-                return False
-        except (urllib.error.URLError, TimeoutError) as error:
-            log(f"{label}: network error on attempt {attempt}: {error}")
-
-        if attempt < MAX_ATTEMPTS:
-            time.sleep(RETRY_DELAY_SECONDS)
-    return False
+def ping(url, key, function, opener=urllib.request.urlopen):
+    path = urllib.parse.quote(function, safe="")
+    req = urllib.request.Request(
+        f"{url}/rest/v1/rpc/{path}",
+        headers={"apikey": key, "Accept": "application/json", "User-Agent": "talentsphere-keepalive/2.0"},
+        method="GET",
+    )
+    with opener(req, timeout=TIMEOUT) as response:
+        if response.status != 200:
+            raise RuntimeError(f"Unexpected HTTP {response.status}")
+        body = response.read(4096)
+        if json.loads(body) != 1:
+            raise RuntimeError("RPC returned an unexpected value; expected JSON integer 1")
 
 
-def main() -> int:
-    base_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    key = os.environ.get("SUPABASE_PUBLISHABLE_KEY", "")
-
-    if not base_url or not key:
-        log("Missing SUPABASE_URL or SUPABASE_PUBLISHABLE_KEY. Set them as secrets.")
+def main(environ=None, opener=urllib.request.urlopen, sleep=time.sleep):
+    if environ is None:
+        environ = os.environ
+    try:
+        url, key, function = configuration(environ)
+    except ValueError as error:
+        log(f"Configuration error: {error}")
         return 2
-
-    headers = {
-        # Publishable keys (sb_publishable_...) are not JWTs, so they go only in
-        # the apikey header. Sending them as a Bearer token causes 401 responses.
-        "apikey": key,
-        "Accept": "application/json",
-        "User-Agent": "talentsphere-keepalive/1.0",
-    }
-
-    # 1) PostgREST root: a REST API request that is read-only and works with zero tables.
-    ok = request_with_retries("rest-root", f"{base_url}/rest/v1/", headers)
-
-    # 2) Optional: a read-only, limit-1 select against a named table, if one exists.
-    table = os.environ.get("KEEPALIVE_TABLE", "").strip()
-    if table:
-        columns = os.environ.get("KEEPALIVE_SELECT_COLUMN", "*").strip() or "*"
-        query = urllib.parse.urlencode({"select": columns, "limit": "1"})
-        table_url = f"{base_url}/rest/v1/{urllib.parse.quote(table)}?{query}"
-        ok = request_with_retries(f"table:{table}", table_url, headers) and ok
-
-    log("Done: all pings succeeded." if ok else "Done: one or more pings FAILED.")
-    return 0 if ok else 1
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            ping(url, key, function, opener)
+            log("Database RPC succeeded (HTTP 200, expected result 1).")
+            return 0
+        except urllib.error.HTTPError as error:
+            log(f"RPC failed: HTTP {error.code}.")
+            if 400 <= error.code < 500 and error.code != 429:
+                log("Check project URL, API key, and RPC creation/grants.")
+                return 1
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            log(f"Network/transport error: {type(error).__name__}")
+        except (ValueError, RuntimeError, json.JSONDecodeError) as error:
+            log(f"Unexpected RPC response: {type(error).__name__}")
+            return 1
+        if attempt < ATTEMPTS:
+            sleep(RETRY_SECONDS * attempt)
+    log("Database activity check failed after retries.")
+    return 1
 
 
 if __name__ == "__main__":
