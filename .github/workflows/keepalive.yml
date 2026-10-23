@@ -2,8 +2,9 @@ name: Supabase keep-alive
 
 on:
   schedule:
-    # Every six hours at minute 17 UTC; GitHub scheduled runs are best effort.
-    - cron: "17 0,6,12,18 * * *"
+    # TEMPORARY TEST MODE: every 5 minutes (GitHub Actions minimum).
+    # Revert to '17 0,6,12,18 * * *' after validation.
+    - cron: "*/5 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
