@@ -1,0 +1,24 @@
+name: Supabase keep-alive watchdog
+
+on:
+  schedule:
+    # Independent monitor, twice daily (UTC), offset from keepalive schedule.
+    - cron: "43 3,15 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  verify-recent-ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail when no successful ping occurred within 18 hours
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          WATCHDOG_MAX_AGE_HOURS: "18"
+        run: python3 scripts/watchdog.py

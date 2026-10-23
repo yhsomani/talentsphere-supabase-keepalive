@@ -2,8 +2,8 @@ name: Supabase keep-alive
 
 on:
   schedule:
-    # Monday and Thursday 06:00 UTC; scheduled runs may be delayed.
-    - cron: "0 6 * * 1,4"
+    # Every six hours at minute 17 UTC; GitHub scheduled runs are best effort.
+    - cron: "17 0,6,12,18 * * *"
   workflow_dispatch:
   push:
     branches: [main]
@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
-      - name: Run unit tests (no network or Supabase secrets)
+      - name: Run keepalive and watchdog unit tests (no network or Supabase secrets)
         run: python3 -m unittest discover -s tests -v
 
   ping:
