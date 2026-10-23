@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
-      - name: Run unit tests (no network or Supabase secrets)
+      - name: Run keepalive and watchdog unit tests (no network or Supabase secrets)
         run: python3 -m unittest discover -s tests -v
 
   ping:
