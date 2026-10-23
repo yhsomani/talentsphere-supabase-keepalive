@@ -7,41 +7,31 @@ so the free-tier database is not paused for inactivity.
 
 - Runs on a GitHub Actions schedule (Monday and Thursday, 06:00 UTC) and on demand.
 - Sends HTTP **GET** requests only:
-  - `GET {SUPABASE_URL}/rest/v1/` (PostgREST root, works with zero tables), and
-  - optionally `GET /rest/v1/<table>?select=...&limit=1` if `KEEPALIVE_TABLE` is set.
+  1. `GET {SUPABASE_URL}/auth/v1/health` - confirms the project is up and the key is accepted (expects 200).
+  2. `GET {SUPABASE_URL}/rest/v1/<KEEPALIVE_TABLE>?select=<cols>&limit=1` - only when `KEEPALIVE_TABLE` is set. This is the request that counts as REST/database activity.
 - It does **not** insert, update, delete, or alter any data or schema.
 - Uses only the Python standard library.
 
-## One-time setup
+## Setup
 
-1. Create a **private** GitHub repository (for example `yhsomani/talentsphere-supabase-keepalive`) and push this folder to it:
+1. Add two repository **secrets** (Settings → Secrets and variables → Actions → Secrets → New repository secret):
 
-   ```bash
-   cd talentsphere-supabase-keepalive
-   git init -b main
-   git add .
-   git commit -m "Add Supabase keep-alive workflow"
-   gh repo create talentsphere-supabase-keepalive --private --source . --push
-   ```
+   | Name | Value |
+   | --- | --- |
+   | `SUPABASE_URL` | `https://qidckctwrkxyiwworchd.supabase.co` (the API URL, not the dashboard link) |
+   | `SUPABASE_PUBLISHABLE_KEY` | The publishable key (`sb_publishable_…`) from Project Settings → API Keys |
 
-2. Add the project URL and publishable key as repository **secrets**
-   (Settings → Secrets and variables → Actions → New repository secret), or with the CLI:
+   Do not use the `service_role` or secret key.
 
-   ```bash
-   gh secret set SUPABASE_URL --body "https://qidckctwrkxyiwworchd.supabase.co"
-   gh secret set SUPABASE_PUBLISHABLE_KEY    # paste the key when prompted
-   ```
+2. Optional but recommended: once a table exists, add a repository **variable** (Variables tab) so the job makes a real REST request:
 
-   Use the **publishable/anon** key from the Supabase dashboard (Project Settings → API Keys).
-   Do not use the `service_role` key.
+   | Name | Value |
+   | --- | --- |
+   | `KEEPALIVE_TABLE` | the table name, for example `keepalive_ping` |
 
-3. Optional: once a table exists, set a repository **variable** so the job also runs a read-only select:
+   Without `KEEPALIVE_TABLE`, the job only checks auth health and logs a warning. That may not count as database activity for Supabase's pause rule.
 
-   ```bash
-   gh variable set KEEPALIVE_TABLE --body "your_table_name"
-   ```
-
-4. Trigger a first run to confirm: Actions → "Supabase keep-alive" → Run workflow.
+3. Run the job once to confirm: Actions → "Supabase keep-alive" → Run workflow. A passing run logs `auth-health: OK (HTTP 200…)`.
 
 ## Local test
 
@@ -53,7 +43,7 @@ python3 scripts/keepalive.py
 
 ## Notes
 
-- Supabase's free-tier inactivity rule counts REST API requests and database connections. A GET to the REST root is a REST request, so it counts as activity.
-- The workflow is scheduled, so GitHub may delay runs by a few minutes. Two runs a week leave a comfortable margin under the 7-day limit.
-- Scheduled workflows on GitHub are disabled automatically after 60 days without repository activity. Re-enable the workflow if that happens, or keep a periodic commit.
-- If the job fails with HTTP 401 or 403, check that the key is the publishable key and that the URL matches the project.
+- The PostgREST root (`/rest/v1/`) is **not** used. Supabase accepts only secret keys there and returns `401 Secret API key required` for publishable keys.
+- Errors print the HTTP status and the first part of Supabase's response body, which states the cause.
+- The workflow is scheduled, so GitHub may delay runs by a few minutes. Two runs a week leave a margin under the 7-day pause limit.
+- GitHub disables scheduled workflows after 60 days without repository activity. Re-enable the workflow if that happens, or keep a periodic commit.
