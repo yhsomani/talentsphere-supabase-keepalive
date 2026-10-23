@@ -1,49 +1,58 @@
-# talentsphere-supabase-keepalive
+# TalentSphere Supabase keepalive
 
-A small, read-only job that pings the TalentSphere production Supabase project
-so the free-tier database is not paused for inactivity.
+A least-privilege, read-only **database query** run by GitHub Actions twice weekly.
+The previous /rest/v1/ root probe returned 401 with a publishable key because
+Supabase requires a secret key at that endpoint. An Auth health probe returned
+200, but does **not** establish that a database query happened.
 
-## What it does
+## One-time setup (required before the workflow can succeed)
 
-- Runs on a GitHub Actions schedule (Monday and Thursday, 06:00 UTC) and on demand.
-- Sends HTTP **GET** requests only:
-  1. `GET {SUPABASE_URL}/auth/v1/health` - confirms the project is up and the key is accepted (expects 200).
-  2. `GET {SUPABASE_URL}/rest/v1/<KEEPALIVE_TABLE>?select=<cols>&limit=1` - only when `KEEPALIVE_TABLE` is set. This is the request that counts as REST/database activity.
-- It does **not** insert, update, delete, or alter any data or schema.
-- Uses only the Python standard library.
+1. In the **correct Supabase project**, open SQL Editor and run
+   [sql/keepalive_ping.sql](sql/keepalive_ping.sql). Review the SQL first. The
+   function executes `SELECT 1`, returns JSON number `1`, and reads no user data.
+   It uses `SECURITY INVOKER`, not `SECURITY DEFINER`.
+2. In repository **Settings > Secrets and variables > Actions**, set:
+   - `SUPABASE_URL`: HTTPS project origin, such as `https://YOUR_PROJECT.supabase.co`
+   - `SUPABASE_PUBLISHABLE_KEY`: that project's publishable key
+     (`sb_publishable_...`), or legacy anon JWT.
+   **Do not store service_role or secret keys for this job.**
+3. In **Actions > Supabase keep-alive > Run workflow**, launch one manual
+   run on the default branch. The ping must report
+   `Database RPC succeeded (HTTP 200, expected result 1).`
+   View run history to verify actual scheduled executions.
 
-## Setup
+The probe sends GET `/rest/v1/rpc/keepalive_ping` with only an `apikey`
+header. The RPC must be in an exposed API schema (normally `public`), and
+`anon` must be permitted to execute it. If the function is not available,
+PostgREST may need its schema cache refreshed. The SQL is deliberately
+idempotent, but grants must be reviewed according to project policy.
 
-1. Add two repository **secrets** (Settings → Secrets and variables → Actions → Secrets → New repository secret):
+## Reliability and limitations
 
-   | Name | Value |
-   | --- | --- |
-   | `SUPABASE_URL` | `https://qidckctwrkxyiwworchd.supabase.co` (the API URL, not the dashboard link) |
-   | `SUPABASE_PUBLISHABLE_KEY` | The publishable key (`sb_publishable_…`) from Project Settings → API Keys |
+- GitHub's cron schedule is Monday and Thursday 06:00 **UTC**. GitHub Actions
+  scheduled runs may be delayed, dropped, or disabled after repository inactivity.
+- This runs an actual database query, but **no keepalive technique is guaranteed**
+  to prevent Supabase free-tier pausing. Supabase's policy and what it counts as
+  qualifying activity may change. Use a paid plan for uptime guarantees.
+- A paused project may require manual restoration in Supabase before a ping
+  can succeed. The script does not attempt to revive it with privileged API keys.
+- A 401/403 usually means the wrong project/key or missing RPC permissions.
+  A 404 usually means the RPC was not created/exposed in the target project.
+- The job fails if the body is not the expected JSON scalar `1`.
+  It never sends credentials in URLs or logs response bodies.
+- Unauthenticated callers with the publishable key may invoke this RPC;
+  the function must remain constant, read-only, and free of private data.
+- The GitHub diagnostic workflow that printed API response bodies has been
+  removed. If any sensitive data appeared in earlier logs, restrict access and
+  rotate affected credentials.
 
-   Do not use the `service_role` or secret key.
-
-2. Optional but recommended: once a table exists, add a repository **variable** (Variables tab) so the job makes a real REST request:
-
-   | Name | Value |
-   | --- | --- |
-   | `KEEPALIVE_TABLE` | the table name, for example `keepalive_ping` |
-
-   Without `KEEPALIVE_TABLE`, the job only checks auth health and logs a warning. That may not count as database activity for Supabase's pause rule.
-
-3. Run the job once to confirm: Actions → "Supabase keep-alive" → Run workflow. A passing run logs `auth-health: OK (HTTP 200…)`.
-
-## Local test
+## Local tests
 
 ```bash
-export SUPABASE_URL="https://qidckctwrkxyiwworchd.supabase.co"
-export SUPABASE_PUBLISHABLE_KEY="<publishable key>"
+python3 -m unittest discover -s tests -v
+SUPABASE_URL=https://YOUR_PROJECT.supabase.co \
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_YOUR_KEY \
 python3 scripts/keepalive.py
 ```
 
-## Notes
-
-- The PostgREST root (`/rest/v1/`) is **not** used. Supabase accepts only secret keys there and returns `401 Secret API key required` for publishable keys.
-- Errors print the HTTP status and the first part of Supabase's response body, which states the cause.
-- The workflow is scheduled, so GitHub may delay runs by a few minutes. Two runs a week leave a margin under the 7-day pause limit.
-- GitHub disables scheduled workflows after 60 days without repository activity. Re-enable the workflow if that happens, or keep a periodic commit.
+No dependencies beyond the Python standard library.

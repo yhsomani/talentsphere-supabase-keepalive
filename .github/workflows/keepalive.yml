@@ -2,28 +2,39 @@ name: Supabase keep-alive
 
 on:
   schedule:
-    # Mondays and Thursdays at 06:00 UTC (about 11:30 IST). Free-tier projects pause after 7 idle days.
+    # Monday and Thursday 06:00 UTC; scheduled runs may be delayed.
     - cron: "0 6 * * 1,4"
-  workflow_dispatch: {}
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
 
 permissions:
   contents: read
 
+concurrency:
+  group: supabase-keepalive-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  ping:
+  tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
+      - name: Run unit tests (no network or Supabase secrets)
+        run: python3 -m unittest discover -s tests -v
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Ping Supabase (read-only)
+  ping:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run database-backed read-only ping
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
-          KEEPALIVE_TABLE: ${{ vars.KEEPALIVE_TABLE }}
-          KEEPALIVE_SELECT_COLUMN: ${{ vars.KEEPALIVE_SELECT_COLUMN }}
-        run: python scripts/keepalive.py
+          KEEPALIVE_RPC: keepalive_ping
+        run: python3 scripts/keepalive.py
