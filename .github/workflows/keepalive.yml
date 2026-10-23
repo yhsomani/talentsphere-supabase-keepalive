@@ -1,0 +1,29 @@
+name: Supabase keep-alive
+
+on:
+  schedule:
+    # Mondays and Thursdays at 06:00 UTC (about 11:30 IST). Free-tier projects pause after 7 idle days.
+    - cron: "0 6 * * 1,4"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Ping Supabase (read-only)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          KEEPALIVE_TABLE: ${{ vars.KEEPALIVE_TABLE }}
+          KEEPALIVE_SELECT_COLUMN: ${{ vars.KEEPALIVE_SELECT_COLUMN }}
+        run: python scripts/keepalive.py
