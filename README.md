@@ -56,3 +56,31 @@ python3 scripts/keepalive.py
 ```
 
 No dependencies beyond the Python standard library.
+
+## Failure alerts and recovery notifications
+
+On every scheduled or manually dispatched run, an `alert` job checks whether the
+unit tests and database ping succeeded:
+
+- On failure, it creates a GitHub Issue titled **Supabase keep-alive failure**,
+  containing a link to the failed Actions run. Subsequent failures add comments
+  to the same open issue instead of creating duplicates.
+- On successful recovery, it comments with the successful run and closes that
+  issue. Healthy runs do not create issues.
+- Only the alert job receives `issues: write`; the ping continues to have
+  read-only repository permissions. No third-party notification tokens or
+  additional paid services are required.
+
+**To receive notifications:** In GitHub, open the repository, choose **Watch >
+Custom**, and enable **Issues** (or choose **All Activity**). In your personal
+**Settings > Notifications**, enable the email/mobile/web notifications you
+want for participating or watching repository issues. You can also enable
+notifications for failed GitHub Actions runs. Issue creation alone does not
+guarantee an email or push notification.
+
+**Limitation:** This alerts when GitHub actually starts and completes a workflow
+attempt. If a scheduled workflow is never started (GitHub drops or disables
+the schedule), this in-workflow alert cannot fire. Independent monitoring
+would be needed for missing-run detection. For safe verification, run the
+workflow manually and check that successful executions do not open issues;
+a failure-path test requires a controlled test rather than breaking production.
