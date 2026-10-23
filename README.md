@@ -32,11 +32,12 @@ idempotent, but grants must be reviewed according to project policy.
 - The ping runs at **00:17, 06:17, 12:17 and 18:17 UTC every day** (four times daily).
   GitHub Actions cron is best-effort and may be delayed, dropped or disabled
   after public-repository inactivity.
-- An independent **watchdog** runs twice daily (03:43 and 15:43 UTC). It fails
-  if GitHub has no successful scheduled/manual **database ping** within 18 hours;
+- An independent **watchdog** runs twice daily (03:43 and 15:43 UTC). It checks
+  the actual `ping` job in a successful scheduled/manual workflow run on `main`
+  within 18 hours;
   successful test-only push/PR runs do not count. See
-  [watchdog.yml](.github/workflows/watchdog.yml). A failed watchdog workflow
-  requires GitHub Actions notifications or external monitoring to alert a person.
+  [watchdog.yml](.github/workflows/watchdog.yml). A failed watchdog creates or updates a deduplicated GitHub Issue, and a
+  verified recovery closes it.
   In GitHub settings, enable failed-workflow notifications and watch this repository.
   GitHub does not guarantee notifications, and if Actions/schedules stop entirely,
   the watchdog also stops. For strict monitoring, use independent external checks.
